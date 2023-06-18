@@ -1,39 +1,58 @@
 import Foundation
 
 struct NicoInitialWatchData: Codable {
-	var context: Context
-	var commentComposite: CommentComposite
-	var thread: Thread
+	var comment: Comment
 	var video: Video
 	var viewer: Viewer
-	struct Thread: Codable {
-		var commentCount: Int
-		var ids: ThreadIDs
-		var serverUrl: String
-		struct ThreadIDs: Codable {
-			var community: String?
-			var `default`: String
-		}
+	struct Client: Codable {
+		var nicosid: String
+		var watchId: String
+		var watchTrackId: String
 	}
-	struct CommentComposite: Codable {
+	struct Comment: Codable {
+		var server: Server
+		var keys: Keys
 		var threads: [Thread]
+		var nvComment: NVComment
+
+		struct Server: Codable {
+			var url: String
+		}
+		struct Keys: Codable {
+			var userKey: String
+		}
 		struct Thread: Codable {
-			var fork: Int
-			var hasNicoscript: Bool
 			var id: Int
+			var fork: Int
+			var forkLabel: String
+			var videoId: String
 			var isActive: Bool
 			var isDefaultPostTarget: Bool
 			var isLeafRequired: Bool
 			var isOwnerThread: Bool
 			var isThreadkeyRequired: Bool
+			var threadkey: String?
+			var is184Forced: Bool
+			var hasNicoscript: Bool
 			var label: String
 			var postkeyStatus: Int
+			var server: String
 		}
-	}
-	struct Context: Codable {
-		var userkey: String
-		var watchId: String
-		var watchTrackId: String
+		struct NVComment: Codable {
+			var threadKey: String
+			var server: String
+			var params: Params
+
+			struct Params: Codable {
+				var targets: [Target]
+				var language: String
+
+				struct Target: Codable {
+					var id: String
+					var fork: String
+				}
+			}
+		}
 	}
 	struct Viewer: Codable {
 		var id: Int
@@ -41,6 +60,14 @@ struct NicoInitialWatchData: Codable {
 	}
 	struct Video: Codable {
 		var duration: Int
+		var count: Count
+
+		struct Count: Codable {
+			var view: Int
+			var comment: Int
+			var mylist: Int
+			var like: Int
+		}
 	}
 
 	struct UnexpectedResponse: Error {
@@ -48,12 +75,12 @@ struct NicoInitialWatchData: Codable {
 		var response: String
 	}
 
-	func makeRequestItems(session: URLSession = URLSession.shared, userID: Int? = nil, userkey: String? = nil) throws -> [CommentRequestItem] {
-		let requests = try commentComposite.threads.filter({ $0.isActive }).flatMap { thread -> [CommentRequestItem] in
+	func makeRequestItems(session: URLSession = URLSession.shared, userID: Int? = nil) throws -> [CommentRequestItem] {
+		let requests = try comment.threads.filter({ $0.isActive }).flatMap { thread -> [CommentRequestItem] in
 			let idStr = String(thread.id)
 			let userID = userID ?? viewer.id
 			let userIDStr = userID == 0 ? "" : String(userID)
-			let key: String? = thread.isThreadkeyRequired ? nil : userkey ?? context.userkey
+			let key: String? = thread.isThreadkeyRequired ? nil : thread.threadkey
 			var threadkey: String? = nil
 			var force184: String? = nil
 			if thread.isThreadkeyRequired {
@@ -88,6 +115,15 @@ struct NicoInitialWatchData: Codable {
 			]
 		}
 		return [start] + packets + [end]
+	}
+}
+
+struct CommentRequest: Codable {
+	var params: NicoInitialWatchData.Comment.NVComment.Params
+	var threadKey: String
+	var additionals: Additionals
+
+	struct Additionals: Codable {
 	}
 }
 

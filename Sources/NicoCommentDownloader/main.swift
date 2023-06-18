@@ -13,12 +13,12 @@ func exitWithError(_ error: String) -> Never {
 
 protocol HTTPDataTaskable {
 	func makeDataTask(using urlsession: URLSession, completionHandler: @escaping (Data?, URLResponse?, Error?) -> ()) -> URLSessionDataTask
-	var url: URL { get }
+	var urlValue: URL { get }
 }
 
 extension URLRequest: HTTPDataTaskable {
-	var url: URL {
-		return self.mainDocumentURL!
+	var urlValue: URL {
+		return self.url!
 	}
 
 	func makeDataTask(using urlsession: URLSession, completionHandler: @escaping (Data?, URLResponse?, Error?) -> ()) -> URLSessionDataTask {
@@ -31,7 +31,7 @@ extension URL: HTTPDataTaskable {
 		urlsession.dataTask(with: self, completionHandler: completionHandler)
 	}
 
-	var url: URL { return self }
+	var urlValue: URL { return self }
 }
 
 extension URLSession {
@@ -63,8 +63,13 @@ extension URLSession {
 	func blockingHTTP200OnlyDataTask<T: HTTPDataTaskable>(with request: T) throws -> Data {
 		let (data, response) = try blockingHTTPDataTask(with: request)
 		if response.statusCode == 200 { return data }
-		throw BadResponseError(url: request.url, code: response.statusCode, data: data)
+		throw BadResponseError(url: request.urlValue, code: response.statusCode, data: data)
 	}
+}
+
+func addAPIHeaders(request: inout URLRequest) {
+	request.setValue("6", forHTTPHeaderField: "X-Frontend-ID")
+	request.setValue("0", forHTTPHeaderField: "X-Frontend-Version")
 }
 
 guard let url = CommandLine.arguments.dropFirst().first.flatMap(URL.init(string:)) else {
@@ -75,9 +80,11 @@ let session = URLSession(configuration: .default)
 
 if let user = ProcessInfo.processInfo.environment["nicouser"], let pass = ProcessInfo.processInfo.environment["nicopass"] {
 	printStdError("Logging in as \(user)...")
-	var request = URLRequest(url: URL(string: "https://account.nicovideo.jp/api/v1/login?site=niconico")!)
+	_ = try session.blockingHTTP200OnlyDataTask(with: URLRequest(url: URL(string: "https://account.nicovideo.jp/login")!))
+	var request = URLRequest(url: URL(string: "https://account.nicovideo.jp/login/redirector?site=niconico")!)
 	request.httpMethod = "POST"
-	request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField:"Content-Type");
+	request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField:"Content-Type")
+	request.setValue("https://account.nicovideo.jp/login", forHTTPHeaderField: "Referer")
 	var set = CharacterSet.urlQueryAllowed
 	set.remove("+")
 	request.httpBody = Data("mail_tel=\(user.addingPercentEncoding(withAllowedCharacters: set)!)&password=\(pass.addingPercentEncoding(withAllowedCharacters: set)!)".utf8)
@@ -86,8 +93,16 @@ if let user = ProcessInfo.processInfo.environment["nicouser"], let pass = Proces
 		printStdError("Failed to log in")
 	}
 }
+else if let nicosession = ProcessInfo.processInfo.environment["nicosession"] {
+	session.configuration.httpCookieStorage!.setCookie(HTTPCookie(properties: [
+		.name: "user_session",
+		.value: nicosession,
+		.path: "/",
+		.domain: ".nicovideo.jp",
+	])!)
+}
 else {
-	printStdError("Not logging in, set the environment variables nicouser and nicopass to log in")
+	printStdError("Not logging in, set the environment variables nicouser and nicopass or nicosession to log in")
 }
 
 let mainPage = try session.blockingHTTP200OnlyDataTask(with: url)
@@ -100,15 +115,18 @@ let attrData = try watchData.attr("data-api-data")
 let apiObject = try JSONDecoder().decode(NicoInitialWatchData.self, from: Data(attrData.utf8))
 
 if apiObject.viewer.id != 0 {
-	printStdError("Logged in as ID \(apiObject.viewer.id) with key \(apiObject.context.userkey)")
+	printStdError("Logged in as ID \(apiObject.viewer.id) with key \(apiObject.comment.keys.userKey)")
 }
 
-FileHandle.standardError.write(Data("Video has \(apiObject.thread.commentCount) comments\n".utf8))
-let reqURL = URL(string: apiObject.thread.serverUrl.replacingOccurrences(of: "/api/", with: "/api.json/"))!
+FileHandle.standardError.write(Data("Video has \(apiObject.video.count.comment) comments\n".utf8))
+
+let nvcomment = apiObject.comment.nvComment
+let reqURL = URL(string: nvcomment.server + "/v1/threads")!
 
 var request = URLRequest(url: reqURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
 request.httpMethod = "POST"
-request.httpBody = try JSONEncoder().encode(try apiObject.makeRequestItems(session: session))
+request.httpBody = try JSONEncoder().encode(CommentRequest(params: nvcomment.params, threadKey: nvcomment.threadKey, additionals: .init()))
 request.addValue("text/plain;charset=UTF-8", forHTTPHeaderField: "Content-Type")
+addAPIHeaders(request: &request)
 
 FileHandle.standardOutput.write(try session.blockingHTTP200OnlyDataTask(with: request))
